@@ -11,7 +11,8 @@ task3_dvsgesture/stepbystep
 *.out
 
 # large assets kept out of version control (see README "Datasets & weights")
-**/dataset_downloaded/
+# (no trailing slash so symlinks to the dataset dir are ignored too)
+**/dataset_downloaded
 task2_vgg16_cifar10/exported_models/snn_weights_vgg.bin
 task3_dvsgesture/cuda_assets/train_data.bin
 
