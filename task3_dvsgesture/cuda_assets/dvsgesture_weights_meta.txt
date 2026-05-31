@@ -1,0 +1,8 @@
+Layer_Name                               | Shape                     | Size(Floats) | Offset(Bytes)  
+----------------------------------------------------------------------------------------------------
+conv_layers.0.0.weight                   | [64, 2, 3, 3]             | 1152         | 0              
+conv_layers.1.0.weight                   | [128, 64, 3, 3]           | 73728        | 4608           
+conv_layers.3.0.weight                   | [128, 128, 3, 3]          | 147456       | 299520         
+fc_layers.0.rc.weight                    | [128, 128]                | 16384        | 889344         
+fc_layers.0.sub_module.0.weight          | [128, 8192]               | 1048576      | 954880         
+fc_layers.1.0.weight                     | [10, 128]                 | 1280         | 5149184        

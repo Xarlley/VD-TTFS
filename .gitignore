@@ -1,0 +1,20 @@
+# compiled CUDA binaries (no extension, sit next to / inside task dirs)
+task1_lenet_mnist/vdttfs
+task1_lenet_mnist/stepbystep
+task1_lenet_mnist/eventdriven
+task2_vgg16_cifar10/vdttfs
+task2_vgg16_cifar10/stepbystep
+task2_vgg16_cifar10/stepbystep_lut
+task3_dvsgesture/vdttfs
+task3_dvsgesture/stepbystep
+*.o
+*.out
+
+# large assets kept out of version control (see README "Datasets & weights")
+**/dataset_downloaded/
+task2_vgg16_cifar10/exported_models/snn_weights_vgg.bin
+task3_dvsgesture/cuda_assets/train_data.bin
+
+# python
+__pycache__/
+*.pyc
