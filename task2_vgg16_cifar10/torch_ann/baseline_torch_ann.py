@@ -1,15 +1,7 @@
 """
-通用框架 baseline（PyTorch · ANN 版）。
-
-完成与 TTFS-SNN **等价的推理任务**：用 VGG16 对 CIFAR-10 分类。
-但实现方式是标准 ANN 的**一次前向**（ReLU + maxpool），不做任何时间步模拟，
-因此代表"通用 GPU 框架做这件事能达到的最佳吞吐"。
-
-等价性依据：TTFS 编码是值保持的——像素 x 在 t=-tc·ln(x) 发放，conv0 的积分核把它解码回 x，
-故 SNN 的 conv0 膜电位 = Σ w·x = ANN 的预激活。逐层同理。因此把同一份 snn_weights_vgg.bin
-当作普通 ReLU ANN 跑、输入用同一份 cifar10_float，应复现≈90.7% 的精度。
-
-用法： python baseline_torch_ann.py [num_images] [batch] [fp16]
+Generic PyTorch ANN baseline (VGG16, CIFAR-10): single forward pass (ReLU + maxpool),
+no time-step simulation. Equivalent inference task to the TTFS-SNN.
+Usage: python baseline_torch_ann.py [num_images] [batch] [fp16]
 """
 import sys, time
 import torch
@@ -17,12 +9,12 @@ import torch.nn as nn
 from weights_io import load_layers
 from data_io import load_images_labels
 
-# 性能开关：开启 TF32 / cuDNN autotune（最佳吞吐，精度无损）
+# perf switches: enable TF32 / cuDNN autotune
 torch.backends.cudnn.benchmark = True
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
-# VGG16：13 conv(3x3,pad1)+ReLU，5 个 2x2 maxpool；3 fc(512->512->512->10)
+# VGG16: 13 conv(3x3,pad1)+ReLU, 5 x 2x2 maxpool; 3 fc(512->512->512->10)
 POOL_AFTER = {1, 3, 6, 9, 12}
 
 
@@ -80,7 +72,7 @@ def main():
                 return net(xb).argmax(1)
         return net(xb).argmax(1)
 
-    # 预热（触发 cuDNN autotune / 编译），不计时
+    # warmup (trigger cuDNN autotune / compile), not timed
     with torch.no_grad():
         _ = infer(imgs[:min(bs, n)])
     if dev == "cuda":
@@ -100,11 +92,11 @@ def main():
         correct += (pred == yb).sum().item()
 
     print("\n" + "=" * 46)
-    print(" PyTorch 通用 ANN baseline (VGG16, 等价推理任务)")
+    print(" PyTorch generic ANN baseline (VGG16, equivalent inference task)")
     print("=" * 46)
     print(f" Images       : {n}")
     print(f" Accuracy     : {correct/n*100:.2f} %")
-    print(f" Total time   : {t_total:.4f} s   (仅推理，不含数据加载)")
+    print(f" Total time   : {t_total:.4f} s   (inference only, excl. data loading)")
     print(f" Throughput   : {n/t_total:.1f} img/s")
     print("=" * 46)
 

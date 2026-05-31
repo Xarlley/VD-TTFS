@@ -5,7 +5,7 @@ for each task; Task 3 has no ANN) were run locally on a single workstation. This
 document records the **runtime environment**, **Round 1** (accuracy + latency),
 and **Round 2** (GPU memory: average + peak).
 
-> ⚠️ This machine is an **RTX 5070 Ti**, *not* the NVIDIA Tesla V100 used in the
+> **Note:** This machine is an RTX 5070 Ti, not the NVIDIA Tesla V100 used in the
 > paper, so absolute latencies differ from the paper's tables. Relative trends
 > (VD-TTFS vs. step-by-step) hold; see the notes at the end for important caveats
 > (especially the Task 3 train/test-split and model differences).
@@ -46,14 +46,16 @@ loading). Speedup is relative to that task's Step-by-Step CUDA baseline.
 
 | Method | Accuracy | Inference time | Speedup vs Step-by-Step |
 |---|---|---|---|
-| Step-by-Step (CUDA) | 98.18% | 0.0497 s | 1.0× |
-| SpikingJelly | 98.23% | 0.996 s | 0.05× |
+| Step-by-Step (CUDA) | 98.18% | 1.146 s | 1.0× |
+| SpikingJelly | 98.23% | 0.996 s | 1.15× |
 | Torch ANN | 99.43% | 0.0058 s | — (dense ANN ref) |
-| **VD-TTFS (CUDA)** | **98.18%** | **0.0493 s** | **1.01×** |
+| **VD-TTFS (CUDA)** | **98.18%** | **0.0493 s** | **23.2×** |
 
-> On this fast GPU, LeNet/MNIST is too small for the temporal-collapse advantage
-> to register: both CUDA variants finish in ~0.05 s, dominated by fixed overhead.
-> (On the paper's V100 the step-by-step is 1.39 s vs VD-TTFS 0.088 s = 15.8×.)
+> The step-by-step baseline traverses all 80 timesteps for every neuron, so the
+> temporal-collapse advantage of VD-TTFS is clearly visible (23.2× on this GPU),
+> consistent with the paper's 15.8× on the V100 (step-by-step 1.39 s vs VD-TTFS
+> 0.088 s). SpikingJelly's single-step path is faster than the naïve CUDA loop
+> but still an order of magnitude behind VD-TTFS.
 
 ### Task 2 — VGG-16 / CIFAR-10 (full 10,000-image test set)
 
@@ -68,9 +70,9 @@ loading). Speedup is relative to that task's Step-by-Step CUDA baseline.
 
 | Method | Accuracy | Samples / split | Inference time | Speedup |
 |---|---|---|---|---|
-| Step-by-Step (CUDA) | 96.29% | 1078 (train split) | 14.79 s | 1.0× |
+| Step-by-Step (CUDA) | 96.29% | 1078 (train split) | 20.85 s | 1.0× |
 | SpikingJelly (FS\_Coding) | 84.09% FS / 76.89% FR | 264 (test split) | 7.92 s | — (see note) |
-| **VD-TTFS (CUDA)** | **96.29%** | 1078 (train split) | **0.969 s** | **15.3×** |
+| **VD-TTFS (CUDA)** | **96.29%** | 1078 (train split) | **0.969 s** | **21.5×** |
 
 > The two CUDA programs evaluate the **1078-sample training export**
 > (`train_data.bin`, from `DVS-Gesture-train10.hdf5`); the SpikingJelly entry runs
@@ -90,7 +92,7 @@ Very short runs (Task 1) yield few samples, so their averages are coarse.
 
 | Task | Method | Avg GPU mem | Peak GPU mem |
 |---|---|---|---|
-| 1 | Step-by-Step (CUDA) | 616 MiB | 812 MiB |
+| 1 | Step-by-Step (CUDA) | 903 MiB | 952 MiB |
 | 1 | SpikingJelly | 657 MiB | 750 MiB |
 | 1 | Torch ANN | 1004 MiB | 3728 MiB |
 | 1 | **VD-TTFS (CUDA)** | **758 MiB** | **1124 MiB** |
@@ -112,8 +114,9 @@ VD-TTFS needs **~2.0 GB** — a 4.2× smaller footprint. On Task 3, VD-TTFS uses
 ## Notes & caveats
 
 1. **Hardware** — RTX 5070 Ti (16 GB, sm_120), not the paper's V100. Absolute
-   latencies are therefore not comparable to the paper; the 5070 Ti is much faster
-   in wall-clock, which is why Task 1's tiny LeNet shows no VD-TTFS speedup here.
+   latencies are therefore not comparable to the paper; the 5070 Ti is
+   substantially faster in wall-clock time, which is why the small Task 1 LeNet
+   shows no VD-TTFS speedup at this scale.
 2. **Batch / workload sizes** — Task 1: full 10k single batch (CUDA), ANN batch
    10000, SJ batch 2000. Task 2: VD-TTFS internal batching over 10k, Step-by-Step
    batch 5000, ANN/SJ batch 1000. Task 3 CUDA: 1078 samples; Task 3 SJ: 264.
@@ -124,8 +127,8 @@ VD-TTFS needs **~2.0 GB** — a 4.2× smaller footprint. On Task 3, VD-TTFS uses
 4. **Task 3 SpikingJelly model** — the only available SpikingJelly model is the
    original FS\_Coding network (CuLIF, FS/rate readout), evaluated on the 264-sample
    test set (84.09% FS / 76.89% FR). It is *not* a TTFS-converted SpikingJelly
-   equivalent of the CUDA program, so its accuracy is not an apples-to-apples
-   comparison with VD-TTFS.
+   equivalent of the CUDA program, so its accuracy is not directly comparable to
+   VD-TTFS.
 5. **Memory methodology** — values are GPU memory held by the experiment's own
    process(es); for PyTorch/SpikingJelly this includes the CUDA context and the
    caching allocator's reserved pool (hence the higher peaks for short ANN runs).

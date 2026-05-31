@@ -6,11 +6,11 @@
 #include <cuda_runtime.h>
 #include <chrono>
 
-// ======== 极致压榨 16GB V100 显存 ========
-// 5000 张图将消耗约 12~14 GB 显存，完美打满 V100
-#define BATCH_SIZE 5000       
-#define TOTAL_IMAGES 10000    
-#define TIME_STEPS 680        
+// Time-driven SNN baseline (VGG16 / CIFAR-10), large-batch variant for 16GB V100.
+// 5000 images per batch consume roughly 12-14 GB of VRAM.
+#define BATCH_SIZE 5000
+#define TOTAL_IMAGES 10000
+#define TIME_STEPS 680
 #define TIME_WINDOW 80.0f
 #define TIME_FIRE_START 40.0f
 #define VTH_INIT 1.0f
@@ -30,12 +30,10 @@ struct LayerWeights {
     int k_h, k_w, c_in, c_out;
 };
 
-// ==========================================
-// 纯时间驱动的 CUDA Kernels
-// ==========================================
+// Pure time-driven CUDA kernels
 
 __global__ void k_encode_input(const float* __restrict__ img, char* __restrict__ spikes_out, int t, float tc, float td) {
-    // 使用 long long 防止极限线程数下的索引溢出
+    // use long long to avoid index overflow at very large thread counts
     long long idx = (long long)blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= (long long)BATCH_SIZE * 3072) return;
     
@@ -191,7 +189,7 @@ __global__ void k_fc_step(
     }
 }
 
-// 权重加载辅助
+// weight loader
 void load_weights(const std::string& filename, std::vector<LayerWeights>& layers) {
     std::ifstream f(filename, std::ios::binary);
     if (!f.is_open()) { std::cerr << "File not found: " << filename << "\n"; exit(1); }
@@ -213,7 +211,7 @@ void load_weights(const std::string& filename, std::vector<LayerWeights>& layers
     }
 }
 
-// 内存重置宏，用于清空每个新批次的状态 (升级为 size_t 防溢出)
+// reset state buffers for each new batch (size_t to avoid overflow)
 void reset_layer(char* spk, float* vm, bool* frd, size_t size) {
     CHECK_CUDA(cudaMemset(spk, 0, (size_t)BATCH_SIZE * size * sizeof(char)));
     if (vm) CHECK_CUDA(cudaMemset(vm, 0, (size_t)BATCH_SIZE * size * sizeof(float)));
@@ -251,8 +249,8 @@ int main() {
     }
     std::cout << " Done." << std::endl;
 
-    // 分配设备内存 (强制使用 size_t 防止数亿字节计算时 Integer Overflow)
-    float *d_img; 
+    // allocate device memory (use size_t to avoid integer overflow on multi-GB sizes)
+    float *d_img;
     CHECK_CUDA(cudaMalloc(&d_img, (size_t)BATCH_SIZE * 3072 * 4)); 
 
     auto alloc_layer = [](char** spk, float** vm, bool** frd, size_t size) {
@@ -281,7 +279,7 @@ int main() {
 
     float tc_in = 34.750164f, td_in = 0.0f;       
 
-    // 重新定义网格划分逻辑以支持海量线程
+    // grid sizing for very large thread counts
     #define LAUNCH_CONV(spk_in, spk_out, vm, frd, H_in, W_in, C_in, H_out, W_out, C_out, lay_idx, depth, prev_tc, prev_td) \
         k_conv_step<<<(((long long)BATCH_SIZE * C_out * H_out * W_out) + 255)/256, 256>>>( \
             spk_in, spk_out, vm, frd, layers[lay_idx].d_kernel, layers[lay_idx].d_bias, \
@@ -309,15 +307,13 @@ int main() {
 
     int num_batches = TOTAL_IMAGES / BATCH_SIZE;
 
-    // ==========================================
-    // 仅需 2 个超大批次的调度循环
-    // ==========================================
+    // batch scheduling loop (only a few very large batches)
     for (int batch = 0; batch < num_batches; ++batch) {
         std::cout << "Processing Extreme Batch [" << batch + 1 << "/" << num_batches << "] (5000 images concurrent)..." << std::flush;
 
         CHECK_CUDA(cudaMemcpy(d_img, &h_all_imgs[batch * BATCH_SIZE * 3072], (size_t)BATCH_SIZE * 3072 * 4, cudaMemcpyHostToDevice));
 
-        // 状态清零
+        // clear state
         reset_layer(s0, nullptr, nullptr, 3072);
         reset_layer(s1, v1, f1, 32*32*64); reset_layer(s1_1, v1_1, f1_1, 32*32*64); reset_layer(p1, nullptr, fp1, 16*16*64);
         reset_layer(s2, v2, f2, 16*16*128); reset_layer(s2_1, v2_1, f2_1, 16*16*128); reset_layer(p2, nullptr, fp2, 8*8*128);

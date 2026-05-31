@@ -1,30 +1,7 @@
-// ============================================================================
-//  VD-TTFS — Time-Sorted, Chunked Early-Exit Integrator  (Task 3: DVSGesture)
-//
-//  Same method as Task 1 (LeNet-MNIST) and Task 2 (VGG-CIFAR): the integrator is
-//  thread-per-neuron, the 160-step time window is collapsed into a single fused
-//  kernel per layer and processed CHUNK BY CHUNK, and a neuron EARLY-EXITS the
-//  instant it crosses threshold. The distinctive ingredient -- time-sorted input
-//  generation -- is realized here too: every single-spike input map is reordered
-//  by arrival time with a lossless per-site counting sort (k_bucketize_*), so a
-//  chunk reads only the synapses that arrive within it, instead of rescanning the
-//  whole fan-in once per chunk (as the prior chunked baselines do).
-//
-//  Adaptations dictated by this network (a recurrent, temporal CuLIF SNN), not by
-//  the method:
-//    * Neuron is current-based LIF: I = I*decay + input;  V += I;  fire V >= th.
-//    * Layer 1 (conv1) consumes the RAW multi-spike event stream (2x32x32x160),
-//      which is not a single-spike map, so it is integrated by streaming over time
-//      (no bucketize); all later layers receive single-spike first-time maps and
-//      are bucketized.
-//    * FC1 is recurrent (its membrane current at t receives the layer's own t-1
-//      spikes), so its time loop stays sequential with a shared spike vector; its
-//      feed-forward 8192-fan-in input is bucketized.
-//    * Prediction = argmin of the FC2 first-spike times.
-//
-//  Build:  nvcc snn_inference_timesorted.cu -o snn_inference_timesorted -O3 -Wno-deprecated-gpu-targets
-//  Run:    ./snn_inference_timesorted
-// ============================================================================
+// VD-TTFS time-sorted, chunked early-exit integrator. Network: 7-layer recurrent
+// CuLIF SNN, Task 3 (DVSGesture). See README/supplementary for method details.
+// Build: nvcc snn_inference_timesorted.cu -o snn_inference_timesorted -O3 -Wno-deprecated-gpu-targets
+// Run:   ./snn_inference_timesorted
 #include <iostream>
 #include <fstream>
 #include <vector>

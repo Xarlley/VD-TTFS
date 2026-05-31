@@ -1,3 +1,4 @@
+// Event-driven TTFS single-image check (VGG16 / CIFAR-10).
 #include <iostream>
 #include <vector>
 #include <string>
@@ -8,7 +9,7 @@
 #include <cfloat>
 
 #define TIME_WINDOW 80.0f
-#define TIME_FIRE_START 40.0f  // 核心修复：层与层之间的启动时间偏移
+#define TIME_FIRE_START 40.0f  // per-layer start-time offset
 #define VTH_INIT 1.0f
 #define INF_TIME 9999.0f
 #define MAX_CONN_LIMIT 5000
@@ -66,7 +67,7 @@ __global__ void k_layer_inference(
             if (t_in < INF_TIME) {
                 float w = kernel[i * C_out + c_out];
                 float w_decayed = w * expf(-(t_in - td_integ) / tc_integ);
-                float arrival_time = t_in - TIME_FIRE_START; // 核心修复：对齐到本地时间窗口
+                float arrival_time = t_in - TIME_FIRE_START; // align to the local time window
                 if (event_count < MAX_CONN_LIMIT) my_events[event_count++] = {arrival_time, w_decayed};
             }
         }
@@ -81,7 +82,7 @@ __global__ void k_layer_inference(
                         if (t_in < INF_TIME) {
                             float w = kernel[((kh * K_w + kw) * C_in + cin) * C_out + c_out];
                             float w_decayed = w * expf(-(t_in - td_integ) / tc_integ);
-                            float arrival_time = t_in - TIME_FIRE_START; // 核心修复：对齐到本地时间窗口
+                            float arrival_time = t_in - TIME_FIRE_START; // align to the local time window
                             if (event_count < MAX_CONN_LIMIT) my_events[event_count++] = {arrival_time, w_decayed};
                         }
                     }
@@ -124,7 +125,7 @@ __global__ void k_layer_inference_vmem(
         if (t_in < INF_TIME) {
             float w = kernel[i * C_out + idx];
             float w_decayed = w * expf(-(t_in - td_integ) / tc_integ);
-            float arrival_time = t_in - TIME_FIRE_START; // 核心修复：对齐到本地时间窗口
+            float arrival_time = t_in - TIME_FIRE_START; // align to the local time window
             if (event_count < MAX_CONN_LIMIT) my_events[event_count++] = {arrival_time, w_decayed};
         }
     }

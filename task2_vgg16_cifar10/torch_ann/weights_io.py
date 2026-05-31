@@ -1,16 +1,7 @@
 """
-解析 exported_models/snn_weights_vgg.bin。
-
-二进制布局（小端，与 CUDA 端 load_weights 完全一致）：
-  int32 num_layers
-  对每层:
-    int32 ndim, ndim 个 int32 kernel shape
-        ndim==4 -> [k_h, k_w, c_in, c_out]   (TensorFlow HWIO)
-        ndim==2 -> [c_in, c_out]
-    float32 * prod(shape)  kernel 数据（按上面 shape 的 C 顺序）
-    int32 ndim_b, int32 b_size, float32 * b_size   bias
-    int32 ndim_tc, int32 tc_size(=1), float32 tc_fire
-    int32 ndim_td, int32 td_size(=1), float32 td
+Parse exported_models/snn_weights_vgg.bin (little-endian; matches CUDA load_weights).
+Layout: int32 num_layers, then per layer kernel (HWIO conv / [c_in,c_out] fc),
+bias, tc_fire and td scalars.
 """
 import struct
 import numpy as np
@@ -55,19 +46,19 @@ def load_layers(path="exported_models/snn_weights_vgg.bin"):
         kflat = rarr(ksz)
         if nd == 4:
             kh, kw, cin, cout = shp
-            # 存储为 HWIO -> 转成 torch 卷积权重 OIHW
+            # stored HWIO -> torch conv weight OIHW
             k = kflat.reshape(kh, kw, cin, cout).transpose(3, 2, 0, 1).copy()
             is_conv = True
         else:
             cin, cout = shp
-            # 存储为 [C_in, C_out] -> 转成 torch Linear 权重 [C_out, C_in]
+            # stored [C_in, C_out] -> torch Linear weight [C_out, C_in]
             k = kflat.reshape(cin, cout).transpose(1, 0).copy()
             is_conv = False
         _ = ri(); bsz = ri(); bias = rarr(bsz)
         _ = ri(); _ = ri(); tc_fire = rf()
         _ = ri(); _ = ri(); td = rf()
         layers.append(Layer(k, bias, tc_fire, td, is_conv))
-    assert off == len(buf), f"未读完: off={off} size={len(buf)}"
+    assert off == len(buf), f"not fully read: off={off} size={len(buf)}"
     return layers
 
 

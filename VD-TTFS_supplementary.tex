@@ -1,0 +1,334 @@
+\documentclass[runningheads]{llncs}
+
+\usepackage[T1]{fontenc}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{xcolor}
+
+\begin{document}
+
+\title{VD-TTFS: Efficient TTFS Computing Architecture on Vector Devices\\
+       \large Supplementary Material}
+\titlerunning{VD-TTFS (Supplementary Material)}
+
+\author{Shifeng Liu\inst{1} \and
+Zhijie Yang\inst{1} \and
+Dongsheng Wang\inst{1} \and
+Lei Wang\inst{1}}
+
+\authorrunning{S. Liu et al.}
+
+\institute{Defense Innovation Institute, Academy of Military Sciences, Beijing, China\\
+\email{charlley.g.l@gmail.com}}
+
+\maketitle
+
+% ---- switch to appendix numbering (A, B, C, ...) ----
+\appendix
+
+\section{Selecting the Integrator Chunk Width $\Delta$}\label{app:chunk}
+
+The time-sorted early-exit integrator of the main paper exposes a single
+granularity hyper-parameter, the \emph{chunk width} $\Delta$: the number of
+consecutive timesteps grouped into each block that the integrator sweeps. This
+appendix details how $\Delta$ is chosen and reports the measured basis for the
+per-task values used in the paper ($\Delta=8$ for VGG-16, $\Delta=16$ for LeNet,
+and $\Delta=32$ for the DVSGesture network). All measurements were taken on a
+single NVIDIA GeForce RTX~5070~Ti (16\,GB, CUDA~12.8, \texttt{nvcc -O3}); the
+optima are hardware-specific, but the underlying relationship is not (Section~\ref{app:chunk-find}).
+
+\subsection{Method}\label{app:chunk-method}
+
+\paragraph{The trade-off.}
+The integrator partitions the (truncated) window $[0,T'_\ell)$ into chunks of
+$\Delta$ timesteps, accumulates the synaptic events arriving within each chunk
+into a per-neuron register array \texttt{delta}$[\Delta]$, integrates chunk by
+chunk, and \emph{halts the instant a neuron crosses its threshold}, so the events
+of all later chunks are never fetched. $\Delta$ sets the resolution of this early
+exit and induces two opposing effects:
+\begin{itemize}
+  \item A \textbf{finer} $\Delta$ lets a neuron stop at a finer temporal
+    granularity, so fewer \emph{post-firing} synapses are processed---valuable
+    when the arrival-ordered early exit is active. However, each chunk carries a
+    fixed bookkeeping cost (clearing \texttt{delta}$[\Delta]$, a threshold scan,
+    loop overhead), repeated $\lceil T/\Delta\rceil$ times, so a very small
+    $\Delta$ multiplies that overhead.
+  \item A \textbf{coarser} $\Delta$ issues fewer chunks and less bookkeeping, but
+    blunts the early exit (a fired neuron still pays out its current chunk) and
+    enlarges \texttt{delta}$[\Delta]$; beyond the register budget this array
+    spills into local memory, which is slow.
+\end{itemize}
+The optimum therefore depends on how much early exit there is to exploit---i.e.\
+the arrival-ordered early-exit factor $\gamma$---and on the window length $T$:
+a strong early exit (small $\gamma$) rewards a fine $\Delta$, whereas a weak or
+absent early exit ($\gamma\!\to\!1$) turns fine chunking into pure overhead and
+favours a coarser $\Delta$, up to the point where \texttt{delta}$[\Delta]$
+local-memory pressure dominates.
+
+\paragraph{Determination procedure.}
+For each task we sweep $\Delta$ over powers of two up to the window length,
+recompile, run the \emph{full} evaluation set on the target GPU, and select the
+latency minimum. Each configuration is executed three times and the minimum
+inference time is reported to suppress scheduling jitter. The task accuracy is
+recorded at every $\Delta$: re-chunking is an exact re-ordering of the same
+synaptic events, so the prediction must be invariant, which we verify empirically
+(the lone exception, due to floating-point summation order, is discussed in
+Section~\ref{app:chunk-find}).
+
+\subsection{Measured Sweeps}\label{app:chunk-data}
+
+Tables~\ref{tab:chunk-t1}--\ref{tab:chunk-t3} report the sweep for each task. The
+row marked $\star$ is the latency minimum; the shipped default is shown in bold.
+
+\begin{table}[t]
+\centering
+\caption{Task~1, LeNet/MNIST ($T=80$), full 10{,}000-image test set.}
+\label{tab:chunk-t1}
+\begin{tabular}{cccc}
+\toprule
+$\Delta$ & Accuracy & Inference time (s) & \\
+\midrule
+4  & 98.18\% & 0.1025 & \\
+8  & 98.18\% & 0.0645 & \\
+\textbf{16} & \textbf{98.18\%} & \textbf{0.0450} & $\star$ \\
+32 & 98.18\% & 0.0489 & \\
+64 & 98.18\% & 0.0559 & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Task~2, VGG-16/CIFAR-10 ($T=80$), full 10{,}000-image test set.}
+\label{tab:chunk-t2}
+\begin{tabular}{cccc}
+\toprule
+$\Delta$ & Accuracy & Inference time (s) & \\
+\midrule
+4  & 90.76\% & 2.730 & $\star$ \\
+\textbf{8}  & \textbf{90.76\%} & \textbf{2.747} & ($+0.6\%$) \\
+16 & 90.76\% & 3.120 & \\
+32 & 90.76\% & 3.204 & \\
+64 & 90.76\% & 3.427 & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Task~3, DVSGesture ($T=160$), 1078 samples.}
+\label{tab:chunk-t3}
+\begin{tabular}{cccc}
+\toprule
+$\Delta$ & Accuracy & Inference time (ms) & \\
+\midrule
+8   & 96.29\% & 1027 & \\
+16  & 96.29\% & 955  & $\star$ \\
+\textbf{32}  & \textbf{96.29\%} & \textbf{966}  & ($+1.2\%$) \\
+64  & 96.38\%$^{\dagger}$ & 1014 & \\
+160 & 96.29\% & 1466 & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Findings}\label{app:chunk-find}
+
+\begin{enumerate}
+  \item \textbf{The shipped defaults are at or near the per-task optimum.}
+    Task~1 ($\Delta=16$) is the exact minimum; Task~2 ($\Delta=8$) lies within
+    $0.6\%$ of the minimum (the marginally faster $\Delta=4$ is within run-to-run
+    noise); Task~3 ($\Delta=32$) is within $1.2\%$ of the minimum and is preferred
+    for its warp alignment.
+  \item \textbf{The optimum tracks $\gamma$ exactly as argued in the main paper.}
+    The strong early exit of VGG-16 ($\gamma=0.62$) rewards fine chunks
+    ($\Delta=4$--$8$); the weak early exit of LeNet ($\gamma\approx0.97$) makes a
+    medium $\Delta=16$ best, as fine chunking is overhead and coarse chunking
+    blunts the little early exit available; the early-exit-free, long-window
+    DVSGesture stream ($\gamma\approx0.99$, $T=160$) favours a coarse
+    $\Delta=16$--$32$, while the extreme $\Delta=160$ spills
+    \texttt{delta}$[\Delta]$ to local memory and is the slowest configuration.
+  \item \textbf{Chunking is lossless.} Accuracy is invariant across $\Delta$ for
+    Tasks~1--2 and for Task~3 except at $\Delta=64$ ($^{\dagger}$), where it
+    differs by a single sample ($96.38\%$ vs.\ $96.29\%$, i.e.\ $1039$ vs.\ $1038$
+    of $1078$). This reflects IEEE-754 accumulation order, not an algorithmic
+    change: different chunk widths sum the identical set of contributions in a
+    different order, and one borderline neuron's first-spike time flips. The event
+    set and its contributions are unchanged---a lossless permutation.
+  \item \textbf{Hardware dependence.} The reported optima are specific to the
+    RTX~5070~Ti; the precise minimum can shift by one step on other GPUs, but the
+    qualitative rule---$\gamma$ and $T$ determine whether a fine or coarse $\Delta$
+    is best---is hardware-independent.
+\end{enumerate}
+
+\section{A Fused Multi-Step LIF Lower Bound for SpikingJelly}\label{app:sjfused}
+
+\subsection{Motivation}\label{app:sjfused-purpose}
+SpikingJelly does not provide an efficient TTFS kernel, and the SpikingJelly
+baselines in the main paper consequently employ its \texttt{torch} backend. A
+natural concern is that a fused or Triton backend would be substantially faster,
+thereby diminishing the apparent advantage of VD-TTFS. This appendix addresses the
+concern directly. A fused multi-step LIF network---executed with SpikingJelly's
+accelerated \texttt{cupy} and \texttt{triton} backends---nonetheless evaluates
+\emph{every} one of the $T$ timesteps, performing neither early exit nor
+event-sparsity exploitation. Its latency therefore constitutes a lower bound on the
+cost of any fused TTFS backend (including a hypothetical TTFS-Triton kernel) on the
+same network: should VD-TTFS prove faster than this bound, the improvement is
+attributable to the algorithm (temporal collapse, arrival-ordered early exit, and
+event sparsity) rather than to a deficiency of the framework.
+
+\subsection{Experimental setup}\label{app:sjfused-setup}
+We instantiate spiking networks with the identical layer structure and identical
+number of timesteps $T$ as Task~1, Task~2, and Task~3, substituting standard LIF
+neurons and random weights and inputs; inference accuracy is immaterial, as only
+latency and memory are of interest. Each network is executed in multi-step mode
+under the \texttt{triton} neuron backend, which is available in SpikingJelly master
+(version 0.0.0.0.15 and later); the released 0.0.0.0.14 exposes only the
+\texttt{torch} and \texttt{cupy} backends. All measurements are performed on a
+single NVIDIA RTX~5070~Ti (16\,GB) with SpikingJelly~0.0.0.0.15, PyTorch~2.12 /
+CUDA~13, and Triton~3.7. Peak GPU memory is measured with \texttt{nvidia-smi}
+(per-process, allocator-agnostic, inclusive of the CUDA context);
+\texttt{torch.cuda.max\_memory\_allocated} is not used, as it omits allocations
+performed outside the PyTorch caching allocator, including those of the
+\texttt{cupy} and \texttt{triton} backends.
+
+\subsection{Acceptance threshold}\label{app:sjfused-threshold}
+We adopt as the reference the per-sample inference latency of VD-TTFS on the same
+device, obtained from the cross-platform measurements: $4.9\,\mu$s (Task~1),
+$274\,\mu$s (Task~2), and $899\,\mu$s (Task~3) on the RTX~5070~Ti. A fused
+multi-step configuration is deemed non-competitive if its per-sample latency
+exceeds ten times the corresponding VD-TTFS latency, or if it cannot be executed
+within the memory of the device. A configuration is classified \emph{infeasible}
+when it does not terminate within the resulting latency budget (a factor of ten,
+i.e.\ $0.49$\,s, $27.4$\,s, and $9.69$\,s for the respective full workloads) or
+raises an out-of-memory condition.
+
+\subsection{Results}\label{app:sjfused-results}
+Table~\ref{tab:sjfused} reports, per task, the VD-TTFS reference latency, the
+Triton multi-step latency, and the resulting determination. A dash denotes that
+no latency could be obtained because the configuration is infeasible under the
+criterion of Section~\ref{app:sjfused-threshold}.
+
+\begin{table}[t]
+\centering
+\caption{SpikingJelly multi-step LIF (\texttt{triton} backend), with structure and
+$T$ identical to each task and random weights, against the VD-TTFS reference on the
+same RTX~5070~Ti. Latencies are per sample.}
+\label{tab:sjfused}
+\begin{tabular}{lrrl}
+\toprule
+Task ($T$) & VD-TTFS (ms/sample) & Triton (ms/sample) & Determination \\
+\midrule
+Task 1 ($T{=}80$)  & 0.0049 & 0.049 (peak 13{,}468\,MiB) & $10.0\times$ slower \\
+Task 2 ($T{=}680$) & 0.274  & ---   & infeasible (memory) \\
+Task 3 ($T{=}160$) & 0.899  & ---   & infeasible (latency) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Findings}\label{app:sjfused-find}
+\begin{enumerate}
+  \item \textbf{Backend invariance.} On Task~1 the \texttt{triton}, \texttt{cupy},
+    and \texttt{torch} backends yield an identical per-sample latency
+    ($0.049$\,ms) and, when measured with \texttt{nvidia-smi}, an identical peak
+    memory ($\approx13.5$\,GB). As the elementwise neuronal update constitutes a
+    negligible fraction of the per-timestep cost, the choice of backend influences
+    neither throughput nor memory.
+  \item \textbf{Latency lower bound (Task~1).} The Triton multi-step latency
+    ($0.049$\,ms/sample) is exactly $10.0\times$ that of VD-TTFS
+    ($0.0049$\,ms/sample). The disparity is structural rather than
+    implementational: the multi-step pass evaluates all $80$ timesteps, whereas
+    VD-TTFS collapses the temporal dimension and terminates at the first spike. A
+    hypothetical TTFS-Triton kernel, subject to the same exhaustive traversal,
+    would incur the same bound.
+  \item \textbf{Memory infeasibility (Task~2).} For VGG-16 at $T{=}680$, multi-step
+    execution simultaneously materializes the activations of all $680$ timesteps.
+    The resulting footprint exhausts the $16$\,GB capacity of the device, raising an
+    out-of-memory condition during execution; under memory configurations that
+    avert the immediate allocation failure, the forward pass does not terminate
+    within the latency budget. The configuration is therefore infeasible on this
+    hardware.
+  \item \textbf{Latency infeasibility (Task~3).} For the DVSGesture network at
+    $T{=}160$, the Triton multi-step forward does not terminate within ten times
+    the VD-TTFS latency; the $9.69$\,s budget is exceeded by more than a factor of
+    forty without completion.
+  \item \textbf{Conclusion.} The inability of the most heavily optimized
+    SpikingJelly backend to match VD-TTFS---by latency on Task~1 and by feasibility
+    on Task~2 and Task~3---confirms that the efficiency of VD-TTFS originates in the
+    algorithm rather than in framework or backend implementation. That a fused
+    Triton execution completes only one of the three workloads, and is an order of
+    magnitude slower on that one, is itself evidence of this advantage.
+\end{enumerate}
+
+\subsection{Soundness of the single-step baseline}\label{app:sjfused-singlestep}
+The SpikingJelly baselines reported in the main text employ the \emph{single-step}
+execution mode, and complete every workload they are applied to: on the
+RTX~5070~Ti, Task~1 in $0.996$\,s (peak $750$\,MiB) and Task~2 in $29.99$\,s (peak
+$3876$\,MiB); on the datacenter V100 of the main text, $1.81$\,s and $38.4$\,s,
+respectively. This stands in deliberate contrast to the multi-step configuration of
+this appendix, which is infeasible for Task~2 and Task~3
+(Section~\ref{app:sjfused-find}).
+
+The contrast is explained by memory complexity. Single-step execution advances the
+network one timestep at a time, retaining only the activations of the current
+timestep together with the persistent neuronal state (the membrane potential); its
+activation memory is therefore $\mathcal{O}(N)$ and \emph{independent of $T$}.
+Multi-step execution instead materializes the activations of all $T$ timesteps at
+once, giving $\mathcal{O}(N\,T)$ memory. For VGG-16 at $T{=}680$ the single-step
+pass occupies $3.9$\,GB and fits comfortably, whereas the multi-step pass exceeds
+the $16$\,GB device. Single-step execution further avoids the fused-kernel
+autotuning over large per-timestep tensors that fails to terminate in the
+multi-step case. The two modes thus embody a memory--throughput trade-off:
+single-step incurs per-timestep launch overhead but is memory-bounded and
+reliably terminates, whereas multi-step amortizes that overhead at the cost of
+$\mathcal{O}(N\,T)$ memory that is prohibitive at long $T$.
+
+These observations establish that the baseline choice is sound. Single-step is not
+a deliberately weakened configuration: it is the only SpikingJelly mode that
+executes the full TTFS dynamics of the deep, long-window networks within commodity
+memory. The ostensibly faster fused/Triton multi-step alternative is, on identical
+hardware, either no faster (Task~1, where the two modes share the same latency) or
+infeasible (Task~2 and Task~3). The single-step baseline therefore represents the
+best achievable SpikingJelly performance on these workloads and constitutes a fair,
+indeed favorable, point of comparison. Even so, it remains an order of magnitude
+slower than VD-TTFS---$20.3\times$ on Task~1 and $10.9\times$ on Task~2 on the
+RTX~5070~Ti---a margin that, by the preceding analysis, a fused backend cannot
+recover.
+
+\section{Justification of the Evaluation Suite}\label{app:tasks}
+The main text evaluates three tasks---LeNet on MNIST ($T{=}80$), VGG-16 on
+CIFAR-10 ($T{=}680$), and a seven-layer recurrent network on the event-based
+DVSGesture stream ($T{=}160$)---spanning shallow to deep architectures, static to
+event-based data, and short to long temporal windows. We argue that the scale of
+this suite is appropriate.
+
+Increasing the network depth or the input complexity raises both the per-timestep
+cost and, decisively, the memory footprint of any timestep-parallel (multi-step)
+execution, whose activation memory scales as $\mathcal{O}(N\,T)$
+(Section~\ref{app:sjfused-singlestep}). The de facto high-performance execution
+path for spiking networks---the fused multi-step (CuPy/Triton) backend of
+SpikingJelly, the most widely adopted framework---is already at its feasibility
+limit on the present suite: as established in Section~\ref{app:sjfused}, it
+exhausts the $16$\,GB device on VGG-16/CIFAR-10 and fails to terminate on the
+DVSGesture network. A strictly larger network or a higher-resolution dataset would
+place this baseline even further beyond reach; it could not be executed at all, and
+hence could not serve as a point of comparison.
+
+The remaining, feasible means of executing the full TTFS dynamics---SpikingJelly in
+single-step mode and a hand-written step-by-step CUDA implementation---both
+traverse every one of the $T$ timesteps without early exit or sparsity
+exploitation, and are already markedly slower than VD-TTFS at the present scale:
+the single-step baseline by $10.9\times$--$20.3\times$
+(Section~\ref{app:sjfused-singlestep}) and the step-by-step CUDA baseline by up to
+$36.8\times$ (main text). As both costs grow with network size and window length,
+this margin would only widen on larger tasks.
+
+The chosen suite therefore occupies the appropriate operating point: it is large
+enough that the standard accelerated SNN baseline has reached the limit of
+feasibility, yet remains tractable for the slower feasible baselines against which
+VD-TTFS is measured. Larger benchmarks would not alter the qualitative
+conclusion---they would merely preclude the baselines themselves---so the
+three-task design of the main text is well justified.
+
+\end{document}

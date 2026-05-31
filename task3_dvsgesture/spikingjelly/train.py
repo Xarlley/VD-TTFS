@@ -14,10 +14,10 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 # # Set CUDA device to the selected GPU
 # os.environ["CUDA_VISIBLE_DEVICES"] = str(chosen_gpu.id)
 import numpy as np
-# 为兼容旧版代码，手动补回被 numpy 2.x 移除的内置类型别名
+# Restore builtin type aliases removed in numpy 2.x for backward compatibility
 np.int = int
 np.float = float
-np.bool = np.bool_  # 关键修改：使用 numpy 内部的布尔类型，而不是 python 内置的 bool
+np.bool = np.bool_  # use numpy's internal boolean type, not python's builtin bool
 np.object = object
 
 import torch

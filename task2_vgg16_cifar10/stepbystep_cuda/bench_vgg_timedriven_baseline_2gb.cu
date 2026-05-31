@@ -1,3 +1,4 @@
+// Time-driven SNN baseline (VGG16 / CIFAR-10), ~2GB batch variant.
 #include <iostream>
 #include <vector>
 #include <string>
@@ -6,9 +7,9 @@
 #include <cuda_runtime.h>
 #include <chrono>
 
-#define BATCH_SIZE 1000       // 每个批次处理的数量，显存占用约 1.8GB
-#define TOTAL_IMAGES 10000    // CIFAR-10 全量推理
-#define TIME_STEPS 680        // 15层*40 + 80 = 680个全局时间步
+#define BATCH_SIZE 1000       // images per batch, ~1.8GB VRAM
+#define TOTAL_IMAGES 10000    // full CIFAR-10 inference
+#define TIME_STEPS 680        // 15 layers * 40 + 80 = 680 global time steps
 #define TIME_WINDOW 80.0f
 #define TIME_FIRE_START 40.0f
 #define VTH_INIT 1.0f
@@ -28,9 +29,7 @@ struct LayerWeights {
     int k_h, k_w, c_in, c_out;
 };
 
-// ==========================================
-// 纯时间驱动的 CUDA Kernels
-// ==========================================
+// Pure time-driven CUDA kernels
 
 __global__ void k_encode_input(const float* __restrict__ img, char* __restrict__ spikes_out, int t, float tc, float td) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -63,7 +62,7 @@ __global__ void k_conv_step(
 
     if (fired[idx]) { spikes_out[idx] = 0; return; }
 
-    // 【核心修复】：基于 NHWC 内存排布的正确张量分解 [Batch, H, W, C]
+    // tensor decomposition for NHWC memory layout [Batch, H, W, C]
     int c_out = idx % C_out;
     int w_out = (idx / C_out) % W_out;
     int h_out = (idx / (C_out * W_out)) % H_out;
@@ -85,7 +84,7 @@ __global__ void k_conv_step(
                 int w_in = w_out - pad_w + kw;
                 if (h_in >= 0 && h_in < H_in && w_in >= 0 && w_in < W_in) {
                     for (int cin = 0; cin < C_in; ++cin) {
-                        int in_idx = ((b * H_in + h_in) * W_in + w_in) * C_in + cin; // 同样遵循 NHWC
+                        int in_idx = ((b * H_in + h_in) * W_in + w_in) * C_in + cin; // also NHWC
                         if (spikes_in[in_idx]) {
                             int w_idx = ((kh * K_w + kw) * C_in + cin) * C_out + c_out;
                             psp += weight[w_idx] * kernel_val;
@@ -120,7 +119,7 @@ __global__ void k_pool_step(
 
     if (fired[idx]) { spikes_out[idx] = 0; return; }
 
-    // 【核心修复】：NHWC 排布
+    // NHWC layout
     int c     = idx % C;
     int w_out = (idx / C) % W_out;
     int h_out = (idx / (C * W_out)) % H_out;
@@ -192,7 +191,7 @@ __global__ void k_fc_step(
     }
 }
 
-// 权重加载辅助
+// weight loader
 void load_weights(const std::string& filename, std::vector<LayerWeights>& layers) {
     std::ifstream f(filename, std::ios::binary);
     if (!f.is_open()) { std::cerr << "File not found: " << filename << "\n"; exit(1); }
@@ -214,7 +213,7 @@ void load_weights(const std::string& filename, std::vector<LayerWeights>& layers
     }
 }
 
-// 内存重置宏，用于清空每个新批次的状态
+// reset state buffers for each new batch
 void reset_layer(char* spk, float* vm, bool* frd, int size) {
     CHECK_CUDA(cudaMemset(spk, 0, BATCH_SIZE * size * sizeof(char)));
     if (vm) CHECK_CUDA(cudaMemset(vm, 0, BATCH_SIZE * size * sizeof(float)));
@@ -228,9 +227,7 @@ int main() {
     std::vector<LayerWeights> layers;
     load_weights("exported_models/snn_weights_vgg.bin", layers);
 
-    // ==========================================
-    // 提前读取全量10000张图片进内存 (避免IO卡顿影响GPU测时)
-    // ==========================================
+    // preload all 10000 images into host memory (so IO does not affect GPU timing)
     std::cout << "Loading 10000 images from disk..." << std::flush;
     std::vector<float> h_all_imgs(TOTAL_IMAGES * 3072);
     std::vector<int> h_all_labels(TOTAL_IMAGES);
@@ -254,8 +251,8 @@ int main() {
     }
     std::cout << " Done." << std::endl;
 
-    // 分配设备内存
-    float *d_img; 
+    // allocate device memory
+    float *d_img;
     CHECK_CUDA(cudaMalloc(&d_img, BATCH_SIZE * 3072 * 4)); 
 
     auto alloc_layer = [](char** spk, float** vm, bool** frd, int size) {
@@ -311,16 +308,14 @@ int main() {
 
     int num_batches = TOTAL_IMAGES / BATCH_SIZE;
 
-    // ==========================================
-    // 批次调度循环
-    // ==========================================
+    // batch scheduling loop
     for (int batch = 0; batch < num_batches; ++batch) {
         std::cout << "Processing Batch [" << batch + 1 << "/" << num_batches << "]..." << std::flush;
 
-        // 1. 将当前批次的图片送入 GPU
+        // 1. copy current batch images to the GPU
         CHECK_CUDA(cudaMemcpy(d_img, &h_all_imgs[batch * BATCH_SIZE * 3072], BATCH_SIZE * 3072 * 4, cudaMemcpyHostToDevice));
 
-        // 2. 将所有网络层的状态清零 (重置为未脉冲、膜电位0)
+        // 2. clear all layer states (no spikes, membrane potential 0)
         reset_layer(s0, nullptr, nullptr, 3072);
         reset_layer(s1, v1, f1, 32*32*64); reset_layer(s1_1, v1_1, f1_1, 32*32*64); reset_layer(p1, nullptr, fp1, 16*16*64);
         reset_layer(s2, v2, f2, 16*16*128); reset_layer(s2_1, v2_1, f2_1, 16*16*128); reset_layer(p2, nullptr, fp2, 8*8*128);
@@ -329,10 +324,10 @@ int main() {
         reset_layer(s5, v5, f5, 2*2*512); reset_layer(s5_1, v5_1, f5_1, 2*2*512); reset_layer(s5_2, v5_2, f5_2, 2*2*512); reset_layer(p5, nullptr, fp5, 1*1*512);
         reset_layer(s_fc1, v_fc1, f_fc1, 512); reset_layer(s_fc2, v_fc2, f_fc2, 512); reset_layer(s_fc3, v_fc3, nullptr, 10);
         
-        // 输出层积分 Vmem 极小值初始化
+        // initialize output-layer max Vmem to a very small value
         CHECK_CUDA(cudaMemcpy(d_max_vmem_fc3, h_init_max_vmem.data(), BATCH_SIZE * 10 * sizeof(float), cudaMemcpyHostToDevice));
 
-        // ================== 时间驱动内核测时开始 ==================
+        // ===== time-driven kernel timing begins =====
         cudaEventRecord(start);
 
         for (int t = 0; t < TIME_STEPS; ++t) {
@@ -371,9 +366,9 @@ int main() {
         float batch_time_ms = 0;
         cudaEventElapsedTime(&batch_time_ms, start, stop);
         total_gpu_time_ms += batch_time_ms;
-        // ================== 时间驱动内核测时结束 ==================
+        // ===== time-driven kernel timing ends =====
 
-        // 统计精度
+        // accuracy stats
         CHECK_CUDA(cudaMemcpy(h_out_max.data(), d_max_vmem_fc3, BATCH_SIZE * 10 * sizeof(float), cudaMemcpyDeviceToHost));
         int batch_correct = 0;
         for (int b = 0; b < BATCH_SIZE; ++b) {
@@ -394,7 +389,7 @@ int main() {
         std::cout << " Batch Acc: " << (float)batch_correct / BATCH_SIZE * 100.0f << "%" << std::endl;
     }
 
-    // 最终统计报告
+    // final summary report
     float total_seconds = total_gpu_time_ms / 1000.0f;
     std::cout << "\n========================================" << std::endl;
     std::cout << "[Baseline CUDA SNN (Time-Driven + 10K Fully Run)]" << std::endl;

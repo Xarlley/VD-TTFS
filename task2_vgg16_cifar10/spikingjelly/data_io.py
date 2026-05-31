@@ -1,8 +1,5 @@
-"""读取 CIFAR-10 测试集（与 CUDA 端完全相同的二进制）以及标签。
-
-每张图 dataset_downloaded/cifar10_float/{i}.bin = 3072 个 float32，
-布局为 HWC：index = (h*32 + w)*3 + c。
-标签 label_onehot：每张 10 个 float32 的 one-hot。
+"""Load CIFAR-10 test images and labels (same binary as the CUDA side).
+Each image is 3072 float32 in HWC; labels are one-hot float32 (10 per image).
 """
 import numpy as np
 import torch

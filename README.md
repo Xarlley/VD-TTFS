@@ -2,6 +2,14 @@
 
 **Efficient TTFS Computing Architecture on Vector Devices** — official code release.
 
+> **Supplementary material:** [`VD-TTFS_supplementary.md`](VD-TTFS_supplementary.md)
+> (readable markdown) · [`VD-TTFS_supplementary.tex`](VD-TTFS_supplementary.tex)
+> (LNCS source). Three appendices:
+> **(A)** how the integrator chunk width Δ is selected, with per-task latency sweeps;
+> **(B)** a fused multi-step LIF lower bound — SpikingJelly's Triton backend is ~10×
+> slower than VD-TTFS on Task 1 and infeasible (OOM / non-terminating) on Task 2–3;
+> **(C)** justification of the three-task evaluation suite.
+
 VD-TTFS recasts the inference of a Time-to-First-Spike (TTFS)-encoded Spiking
 Neural Network from an iterative discrete-time simulation into a **single
 arrival-ordered sparse forward pass** on commodity vector devices (GPUs). It
@@ -20,6 +28,31 @@ behaviour to be simulated, and is realised by three components:
    and early-exits, so all later-arriving synapses are never fetched. The
    early-exit decision propagates back into input generation itself.
 
+## Method coverage in this release
+
+The released CUDA programs implement the **lossless** VD-TTFS configuration and
+faithfully reproduce each baseline's accuracy. A few points make the mapping
+between the paper's three components and the code explicit:
+
+- **(iii) Time-sorted, chunked early-exit integrator** — implemented in every
+  task (`k_bucketize*` counting-sort into arrival chunks, then a chunked
+  integrator that halts at the first spike). The chunk width `Δ` matches the
+  paper per task (16 / 8 / 32 for Tasks 1 / 2 / 3).
+- **(i) LUT linearization** — implemented for Tasks 1 and 2 (`update_LUTs` builds
+  the per-layer decay and threshold tables `LUT_decay` / `LUT_th`). **Task 3
+  applies only the time-sorted early-exit integrator:** its CuLIF neuron uses a
+  constant per-step current decay and a constant threshold, so there is no
+  per-timestep transcendental term to tabulate and the LUT is not applicable.
+- **(ii) Input-aware temporal truncation** is an **offline configuration**, not a
+  runtime stage. The integration window is the compile-time constant
+  `TIME_WINDOW`, set to the full simulation window `T` in this lossless release.
+  Truncation is applied by reducing this window — guided offline by the
+  layer-wise spike-time percentiles described in the paper — so that
+  late-arriving, low-salience spikes are discarded for a bounded accuracy budget.
+  Because the default build uses the full window, the headline accuracy and
+  speedup numbers below are the lossless operating point and are unaffected by
+  this setting.
+
 ## Results (paper)
 
 | Task | Network / Dataset | Speedup vs Step-by-Step CUDA | Ops saved vs ANN |
@@ -33,8 +66,8 @@ reduction in measured total energy. Accuracy loss stays below **1.3%**.
 
 ## Repository layout
 
-Each task provides up to four implementations of the *same* inference workload
-so that throughput/energy can be compared apples-to-apples:
+Each task provides up to four implementations of the *same* inference workload,
+so that throughput and energy can be compared on equal terms:
 
 ```
 task1_lenet_mnist/
@@ -42,9 +75,9 @@ task1_lenet_mnist/
   stepbystep_cuda/          naïve time-driven step-by-step baseline
   torch_ann/                dense PyTorch/cuDNN ANN reference (LeNet)
   spikingjelly/             structurally identical TTFS-SNN in SpikingJelly
-  eventdriven_baseline_cuda/  corrected event-driven CUDA baseline (snn_new.cu)
+  eventdriven_baseline_cuda/  corrected event-driven CUDA baseline (snn_eventdriven_baseline.cu)
   macs/                     operation-count (MAC) profiler
-  exported_models/          snn_weights.bin (LeNet weights, 117 KB)
+  exported_models/          (place snn_weights.bin here — not committed)
 task2_vgg16_cifar10/
   vdttfs_cuda/              VD-TTFS                                    ← our method
   stepbystep_cuda/          naïve time-driven step-by-step baseline (+2 GB variant)
@@ -55,10 +88,10 @@ task2_vgg16_cifar10/
   exported_models/          (place snn_weights_vgg.bin here — 59 MB, see below)
 task3_dvsgesture/
   vdttfs_cuda/              VD-TTFS                                    ← our method
-  stepbystep_cuda/          step-by-step TTFS baseline (snn_inference_TTFS.cu)
+  stepbystep_cuda/          step-by-step time-driven baseline (snn_dvs_stepbystep.cu)
   spikingjelly/             SpikingJelly reference (spkjelly/)
   macs/                     MAC profiler
-  cuda_assets/              dvsgesture_weights.bin + a single sample + labels
+  cuda_assets/              (place dvsgesture_weights.bin + train_labels.bin here — not committed)
 ```
 
 > **Note (Task 3 has no ANN baseline)** — DVSGesture is an event stream with no
@@ -118,18 +151,33 @@ python spikingjelly/baseline_spikingjelly_mnist.py [num_images] [batch_size]
 
 ## Datasets & weights
 
+**No weights or datasets are committed to this repository.** Obtain or regenerate
+them and place them at the relative paths below, in the formats documented in this
+section (and in each task's `weights_io.py`).
+
 | Task | Weights | Test set (relative path expected at run time) |
 |------|---------|------------------------------------------------|
-| 1 | `exported_models/snn_weights.bin` (included) | `dataset_downloaded/mnist_test10k/{0..9999}.bin` |
-| 2 | `exported_models/snn_weights_vgg.bin` (**59 MB — not committed**) | `dataset_downloaded/cifar10_float/{0..9999}.bin` + `label_onehot` |
-| 3 | `cuda_assets/dvsgesture_weights.bin` (included) | `cuda_assets/train_data.bin` (**1.4 GB — not committed**) + `train_labels.bin` (included) |
+| 1 | `exported_models/snn_weights.bin` | `dataset_downloaded/mnist_test10k/{0..9999}.bin` + `label_onehot` |
+| 2 | `exported_models/snn_weights_vgg.bin` | `dataset_downloaded/cifar10_float/{0..9999}.bin` + `label_onehot` |
+| 3 | `cuda_assets/dvsgesture_weights.bin` | `cuda_assets/train_data.bin` + `cuda_assets/train_labels.bin` |
 
-The CIFAR-10/MNIST test sets are exported to flat binary blobs from the standard
-datasets (one file per image); the full DVSGesture test set (1078 samples) is
-exported to `cuda_assets/train_data.bin`. A single DVSGesture sample
-(`cuda_assets/single_data.bin`) is included for a quick correctness check.
-See the project's export scripts (`binary_mnist_create.py`,
-`binary_cifar10_create.py`, `export_dataset.py`) to regenerate these.
+**Binary layouts** (so the inputs can be regenerated and placed at the paths above):
+
+- **MNIST** — `dataset_downloaded/mnist_test10k/{i}.bin`: 784 `float32`, row-major
+  28×28, single channel; `label_onehot`: `N`×10 `float32`.
+- **CIFAR-10** — `dataset_downloaded/cifar10_float/{i}.bin`: 3072 `float32`, HWC
+  order `(h*32+w)*3+c`; `label_onehot`: `N`×10 `float32`.
+- **DVSGesture** — `cuda_assets/train_data.bin`: `N`×2×32×32×160 `float32` event
+  tensor; `cuda_assets/train_labels.bin`: `N`×10 `int32` one-hot. The CUDA programs
+  evaluate the `N=1078` export drawn from the DVSGesture training split (this is the
+  evaluation set used throughout; see `BENCHMARKS_5070Ti.md`).
+- **Weights** — the binary format is documented in each task's `weights_io.py`
+  (`int32 num_layers`, then per layer the kernel shape and data, bias, and the two
+  TTFS time constants). All weights must be supplied by the user; none are committed.
+
+The flat-binary inputs and weights are produced by the export step of the upstream
+training pipelines (T2FSNN for Tasks 1–2, FS\_Coding for Task 3); those pipelines
+are not part of this inference release.
 
 ## Status
 

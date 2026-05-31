@@ -77,7 +77,7 @@ the result must be invariant (see the FP note below).
 
 → optimum **Δ = 16** (the shipped default). LeNet fires late relative to its small
 fan-in (γ≈0.97, early exit weak), so very fine chunks (4, 8) are pure overhead and
-coarse chunks (32, 64) blunt the little early exit there is; 16 is the sweet spot.
+coarse chunks (32, 64) blunt the limited early exit available; Δ = 16 is the optimum.
 
 ### Task 2 — VGG-16 / CIFAR-10 (T = 80), 10,000 images
 

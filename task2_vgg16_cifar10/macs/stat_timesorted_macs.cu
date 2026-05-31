@@ -1,46 +1,6 @@
-// ============================================================================
-//  VD-TTFS — Time-Sorted, Input-Generation Early-Exit Integrator
-//  VGG16 / CIFAR-10, full 10000-image inference.
-//
-//  PRINCIPLE (paper's integrator, taken to its fullest form):
-//  Process the time window CHUNK BY CHUNK; the instant a chunk crosses the
-//  (decaying) threshold, record the first-spike time and EARLY-EXIT. Here the
-//  early exit is pushed all the way into INPUT GENERATION: synapses are consumed
-//  in ARRIVAL-TIME ORDER, so once a neuron fires we never read / multiply /
-//  accumulate the synapses that arrive in later chunks. Since gamma ~ 0.2 (most
-//  neurons fire early), this skips the bulk of the fan-in work that the plain
-//  thread-per-neuron kernel always pays (it materializes the full delta[80]
-//  before integrating).
-//
-//  HOW (two kernels per layer):
-//   (1) k_bucketize: one thread per input "column" (a spatial site (img,h,w) for
-//       conv, or one image for FC). Counting-sorts that column's active spikes
-//       into NUM_CHUNKS = ceil(T/CHUNK) time buckets by arrival chunk (tb/CHUNK).
-//       Lossless: it only REORDERS channels and records per-chunk offsets. Output:
-//         bkt_cin[col, :]  reordered input-channel indices
-//         bkt_tin[col, :]  their spike times
-//         bkt_off[col, 0..NUM_CHUNKS]  start index of each chunk + the active total
-//   (2) k_conv_bucketed: one thread per output neuron. For chunk tau it gathers
-//       ONLY that chunk's slice [off[tau],off[tau+1]) of each receptive-field
-//       column into a CHUNK-wide delta, integrates with running carry, and breaks
-//       the instant the threshold is crossed -> later chunks' synapses are never
-//       touched. Weight reads stay coalesced (lane==c_out, all c_out of a site
-//       share the same per-column sort order).
-//
-//  CHUNK is the granularity knob (finer => more late synapses skipped, but more
-//  per-chunk overhead). Measured on RTX 5070 Ti, full 10000 CIFAR-10, accuracy
-//  90.76% (lossless, identical to the thread-level kernel):
-//    CHUNK=32 -> 3.25s   CHUNK=16 -> 3.10s   CHUNK=8 -> 2.74s (best)
-//    CHUNK=4  -> 2.77s   CHUNK=2  -> 3.26s (overhead dominates)
-//  vs thread-level baseline (..._warp_opt_full10k_v2): 3.32s.  => ~1.21x faster.
-//
-//  Build (from repo root):
-//    nvcc cuda/bench_vgg_eventdriven_timesorted_earlyexit.cu \
-//         -o cuda/bench_vgg_eventdriven_timesorted_earlyexit -O3 \
-//         -Wno-deprecated-gpu-targets
-//  Run (from repo root):
-//    ./cuda/bench_vgg_eventdriven_timesorted_earlyexit
-// ============================================================================
+// VD-TTFS time-sorted early-exit integrator, instrumented for MAC counting (VGG16 / CIFAR-10).
+// Full 10000-image inference; reports SNN vs dense-ANN MAC ratios. See repo docs for the method.
+// Define NOEARLYEXIT to measure the full sparse pass (Fr * dense) instead.
 #include <iostream>
 #include <vector>
 #include <string>

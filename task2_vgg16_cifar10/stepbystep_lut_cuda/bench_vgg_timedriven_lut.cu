@@ -1,3 +1,4 @@
+// Time-driven SNN baseline with on-GPU LUTs (VGG16 / CIFAR-10).
 #include <iostream>
 #include <vector>
 #include <string>
@@ -8,8 +9,8 @@
 
 #define BATCH_SIZE 1000
 #define TOTAL_IMAGES 10000
-// 必须推进到 720 以确保最后一层 (15 * 40 + 80 = 680, 加上预留容余) 完整推演
-#define TIME_STEPS 720 
+// advance to 720 so the last layer (15 * 40 + 80 = 680, plus margin) fully unrolls
+#define TIME_STEPS 720
 #define TIME_WINDOW 80
 #define TIME_FIRE_START 40
 #define VTH_INIT 1.0f
@@ -29,9 +30,7 @@ struct LayerWeights {
     int k_h, k_w, c_in, c_out;
 };
 
-// ==========================================
-// 1. GPU 内置 LUT 生成器 (消除 CPU/GPU 浮点差异)
-// ==========================================
+// 1. on-GPU LUT generator (avoids CPU/GPU floating-point differences)
 __global__ void k_init_luts(float* lut_integ, float* lut_fire, float prev_tc, float prev_td, float tc_fire, float td_fire) {
     int t = threadIdx.x; 
     if (t <= 80) {
@@ -40,9 +39,7 @@ __global__ void k_init_luts(float* lut_integ, float* lut_fire, float prev_tc, fl
     }
 }
 
-// ==========================================
-// 2. 输入层编码器
-// ==========================================
+// 2. input-layer encoder
 __global__ void k_precompute_input_spikes(const float* __restrict__ img, int* __restrict__ spike_times, float tc, float td) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= BATCH_SIZE * 3072) return;
@@ -52,7 +49,7 @@ __global__ void k_precompute_input_spikes(const float* __restrict__ img, int* __
     
     float t_float = td - tc * logf(pixel);
     int t_spike = (int)ceilf(t_float < 0.0f ? 0.0f : t_float);
-    spike_times[idx] = (t_spike <= 80) ? t_spike : 9999; // 允许 t=80 的极限暗像素
+    spike_times[idx] = (t_spike <= 80) ? t_spike : 9999; // allow t=80 limit for dark pixels
 }
 
 __global__ void k_encode_input(const int* __restrict__ spike_times, char* __restrict__ spikes_out, int t) {
@@ -61,9 +58,7 @@ __global__ void k_encode_input(const int* __restrict__ spike_times, char* __rest
     spikes_out[idx] = (spike_times[idx] == t) ? 1 : 0;
 }
 
-// ==========================================
-// 3. 核心计算单元 (严格切分 t_in 和 t_fire 的作用域)
-// ==========================================
+// 3. core compute unit (strictly separates the t_in and t_fire phases)
 __global__ void k_conv_step(
     const char* __restrict__ spikes_in, char* __restrict__ spikes_out, 
     float* __restrict__ vmem, bool* __restrict__ fired,
@@ -190,9 +185,7 @@ __global__ void k_fc_out_step(
     }
 }
 
-// ==========================================
-// 辅助及精准控制函数
-// ==========================================
+// host helpers and phase control
 inline void launch_conv_host(int t, int lay_idx, char* spk_in, char* spk_out, float* vm, bool* frd, 
                              int H_in, int W_in, int C_in, int H_out, int W_out, int C_out,
                              float* d_lut_integ, float* d_lut_fire, const std::vector<LayerWeights>& layers) 
@@ -200,9 +193,9 @@ inline void launch_conv_host(int t, int lay_idx, char* spk_in, char* spk_out, fl
     int t_in   = t - lay_idx * TIME_FIRE_START;
     int t_fire = t - (lay_idx + 1) * TIME_FIRE_START;
 
-    bool do_integ = (t_in >= 0 && t_in <= 80); // 允许提取负时间的边界峰值
+    bool do_integ = (t_in >= 0 && t_in <= 80); // capture boundary peaks at negative time
     int td_ceil = (layers[lay_idx].td > 0) ? (int)ceilf(layers[lay_idx].td) : 0;
-    bool do_fire  = (t_fire >= td_ceil && t_fire < 80); // 严格截断 <80
+    bool do_fire  = (t_fire >= td_ceil && t_fire < 80); // strictly truncate at <80
 
     if (!do_integ && !do_fire) return;
 
@@ -236,7 +229,7 @@ inline void launch_fc_out_host(int t, int lay_idx, char* spk_in, float* vm, int 
     int t_fire = t - (lay_idx + 1) * TIME_FIRE_START;
 
     bool do_integ = (t_in >= 0 && t_in <= 80);
-    bool do_eval  = (t_fire >= 0 && t_fire < 80); // 彻底解决 max_vmem 的漂移
+    bool do_eval  = (t_fire >= 0 && t_fire < 80); // fully prevents max_vmem drift
 
     if (!do_integ && !do_eval) return;
 
@@ -281,8 +274,8 @@ int main() {
     std::vector<LayerWeights> layers;
     load_weights("exported_models/snn_weights_vgg.bin", layers);
 
-    // 完全在 GPU 上初始化 LUT，保证 ULP (Unit in the Last Place) 绝对一致
-    float tc_in = 34.750164f, td_in = 0.0f; 
+    // initialize LUTs entirely on the GPU for exact ULP (Unit in the Last Place) consistency
+    float tc_in = 34.750164f, td_in = 0.0f;
     float *d_lut_integ, *d_lut_fire;
     CHECK_CUDA(cudaMalloc(&d_lut_integ, 16 * 81 * sizeof(float)));
     CHECK_CUDA(cudaMalloc(&d_lut_fire,  16 * 81 * sizeof(float)));

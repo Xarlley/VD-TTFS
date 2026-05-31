@@ -1,14 +1,7 @@
 """
-通用框架 baseline #2：基于 SpikingJelly 的时间驱动 TTFS-SNN 推理。
-
-与 baseline_torch.py 数学完全一致，但网络用 SpikingJelly 的
-`activation_based.layer` 突触模块搭建，神经元用自定义的
-`base.MemoryModule` 子类（带状态记忆，配合 functional.reset_net 复位），
-以体现"通用 SNN 框架"的写法与开销。
-
-权重 / 数据集 / TTFS 动力学与 CUDA 端、torch 端三者等价。
-
-用法： python baseline_spikingjelly.py [num_images] [batch_size]
+Baseline #2: SpikingJelly time-driven TTFS-SNN inference (VGG16, CIFAR-10).
+Same math as baseline_torch.py, built with SpikingJelly layer/MemoryModule.
+Usage: python baseline_spikingjelly.py [num_images] [batch_size]
 """
 import sys, time, math
 import torch
@@ -21,7 +14,7 @@ from baseline_torch import ARCH, TIME_STEPS, TW, TFS, VTH, TC_IN, TD_IN, SPK_EPS
 
 
 class TTFSNode(base.MemoryModule):
-    """自定义 TTFS 神经元：时间窗内按 exp 核积分，过（随时间衰减的）阈值发放一次。"""
+    """TTFS neuron: integrate via exp kernel in window, fire once over decaying threshold."""
     def __init__(self, i, is_conv, is_out, bias, tc_i, td_i, tc_f, td_f):
         super().__init__()
         self.i, self.is_conv, self.is_out = i, is_conv, is_out
@@ -32,7 +25,7 @@ class TTFSNode(base.MemoryModule):
         self.register_memory("max_v", None)
 
     def single_step_forward(self, x, t):
-        # x 为本步突触电流；x=None 表示积分窗已关闭、只做发放判定（无新输入）。
+        # x: synaptic current this step; x=None means integration window closed (fire check only).
         if self.v is None:
             self.v = torch.zeros_like(x)
             self.fired = torch.zeros_like(x, dtype=torch.bool)
@@ -63,7 +56,7 @@ class TTFSNode(base.MemoryModule):
 
 
 class PoolLatch(base.MemoryModule):
-    """2x2 脉冲 OR 池化，带 latch（每个池化位置只发放一次）。"""
+    """2x2 spike OR pooling with latch (each pooled position fires once)."""
     def __init__(self):
         super().__init__()
         self.pool = nn.MaxPool2d(2)
@@ -102,7 +95,7 @@ class SJNet(nn.Module):
     @torch.no_grad()
     def run_batch(self, imgs):
         functional.reset_net(self)
-        # 输入编码（与 torch 版一致）
+        # input encoding (same as torch version)
         tfloat = (-TC_IN) * torch.log(imgs.clamp_min(1e-30)) + TD_IN
         tspike = torch.ceil(tfloat.clamp_min(0.0))
         valid = (imgs >= SPK_EPS) & (tspike <= TW)
@@ -110,7 +103,7 @@ class SJNet(nn.Module):
 
         out_node = self.nodes[-1]
         N = imgs.shape[0]
-        # 各层"交给下一层"的零张量（当本层处于非活跃时间窗时直接复用，省掉无谓计算）
+        # per-layer zero handoff tensor (reused when layer is outside its active window)
         zero_handoff = []
         for i, (typ, cin, cout, H, Wd, pool) in enumerate(ARCH):
             if i == len(ARCH) - 1:
@@ -127,7 +120,7 @@ class SJNet(nn.Module):
         for t in range(TIME_STEPS):
             spikes = (spike_time == t).float()
             for i, (typ, cin, cout, H, Wd, pool) in enumerate(ARCH):
-                # 本层活跃时间窗：积分窗 [i*40, i*40+80) ∪ 发放窗 [(i+1)*40, (i+1)*40+80)
+                # active window: integ [i*40, i*40+80) U fire [(i+1)*40, (i+1)*40+80)
                 node_active = (i * TFS <= t < (i + 1) * TFS + TW)
                 if not node_active:
                     if i != len(ARCH) - 1:
@@ -172,11 +165,11 @@ def main():
         print(f"  batch {b+1}/{nb}  acc_so_far={correct/((b+1)*bs)*100:.2f}%  elapsed={t_total:.1f}s", flush=True)
 
     print("\n" + "=" * 46)
-    print(" SpikingJelly 通用 TTFS-SNN baseline")
+    print(" SpikingJelly generic TTFS-SNN baseline")
     print("=" * 46)
     print(f" Images       : {n}")
     print(f" Accuracy     : {correct/n*100:.2f} %")
-    print(f" Total time   : {t_total:.3f} s   (仅推理，不含数据加载)")
+    print(f" Total time   : {t_total:.3f} s   (inference only, excl. data loading)")
     print(f" Throughput   : {n/t_total:.2f} img/s")
     print("=" * 46)
 

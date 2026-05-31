@@ -1,40 +1,7 @@
-// ============================================================================
-//  VD-TTFS — Time-Sorted, Input-Generation Early-Exit Integrator
-//  Task 1: LeNet-style CNN on MNIST, evaluated on the full 10000-image test set
-//  (dataset_downloaded/mnist_test10k/, exported from x_test of mnist.npz).
-//
-//  THE METHOD IS IDENTICAL to the VGG/CIFAR implementation
-//  (cuda/bench_vgg_eventdriven_timesorted_earlyexit.cu): synaptic events are
-//  reordered by arrival time (a lossless per-column counting sort, k_bucketize)
-//  and the integrator (k_conv_bucketed) sweeps the time window CHUNK BY CHUNK;
-//  the instant a neuron crosses the decaying threshold it records its first-spike
-//  time and EARLY-EXITS, so the gather / weight-fetch / multiply-accumulate of all
-//  later-arriving synapses is never performed. The bucketize kernel and the
-//  chunked early-exit integrator loop are structurally the same as in that file.
-//
-//  The only differences are dictated by this network/model (not by the method):
-//    * valid convolution (no padding) instead of same-padding;
-//    * no inter-layer temporal offset (TIME_FIRE_START = 0 here vs 40 there);
-//    * the output layer fires like any other and the prediction is argmin of the
-//      first-spike times, whereas the T2FSNN-VGG output reads argmax of the
-//      membrane potential.
-//
-//  Network (LeNet-MNIST):
-//    encode(28x28x1) -> Conv1 5x5 1->12 (valid) 24x24x12 -> Pool 12x12x12
-//                    -> Conv2 5x5 12->64 (valid) 8x8x64   -> Pool 4x4x64 (=1024)
-//                    -> FC 1024->10   ; prediction = argmin spike time.
-//  Dynamics (matching snn_new.cu, the corrected event-driven baseline):
-//    decay  : LUT_decay[t] = exp(-(t - td_integ)/tc_integ)  (per layer:
-//             (tc_integ,td_integ) = previous layer's (tc_fire,td); layer 0 uses
-//             the input encoding constants).  Spike times are integers in [0,T).
-//    thresh : LUT_th[t] = V0 * exp(-(t - td_fire)/tc_fire)   (current layer).
-//    fire   : v_mem + bias >= LUT_th[t], for t in [ceil(td_fire), T).
-//
-//  Build (in this directory):
-//    nvcc snn_timesorted_earlyexit.cu -o snn_timesorted_earlyexit -O3 -Wno-deprecated-gpu-targets
-//  Run:
-//    ./snn_timesorted_earlyexit
-// ============================================================================
+// MAC-count instrumentation for the VD-TTFS time-sorted early-exit integrator.
+// Task 1: LeNet on MNIST. Reports sparse SNN MACs vs dense ANN MACs.
+// Build: nvcc stat_mnist_macs.cu -o stat_mnist_macs -O3 -Wno-deprecated-gpu-targets
+//        (add -DNOEARLYEXIT to disable early exit). Run: ./stat_mnist_macs
 #include <iostream>
 #include <vector>
 #include <string>
