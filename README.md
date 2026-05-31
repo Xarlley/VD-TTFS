@@ -39,6 +39,9 @@ so that throughput/energy can be compared apples-to-apples:
 ```
 task1_lenet_mnist/
   vdttfs_cuda/              VD-TTFS (time-sorted chunked early-exit)   ← our method
+  stepbystep_cuda/          naïve time-driven step-by-step baseline
+  torch_ann/                dense PyTorch/cuDNN ANN reference (LeNet)
+  spikingjelly/             structurally identical TTFS-SNN in SpikingJelly
   eventdriven_baseline_cuda/  corrected event-driven CUDA baseline (snn_new.cu)
   macs/                     operation-count (MAC) profiler
   exported_models/          snn_weights.bin (LeNet weights, 117 KB)
@@ -97,9 +100,15 @@ Python ≥ 3.10 with `torch`, `cupy-cuda12x`, `triton`, `spikingjelly`,
 `numpy`. The Task 2 baselines read the same `snn_weights_vgg.bin`:
 
 ```bash
+# Task 2 (VGG-16 / CIFAR-10)
 cd task2_vgg16_cifar10
-python torch_ann/baseline_torch_ann.py        [num_images] [batch] [fp16]
-python spikingjelly/baseline_spikingjelly.py  [num_images] [batch_size]
+python torch_ann/baseline_torch_ann.py             [num_images] [batch] [fp16]
+python spikingjelly/baseline_spikingjelly.py       [num_images] [batch_size]
+
+# Task 1 (LeNet / MNIST)
+cd task1_lenet_mnist
+python torch_ann/baseline_torch_ann_mnist.py       [num_images] [batch] [fp16]
+python spikingjelly/baseline_spikingjelly_mnist.py [num_images] [batch_size]
 ```
 
 > The SpikingJelly TTFS neuron is a **custom single-step** node: SpikingJelly's
@@ -124,11 +133,13 @@ See the project's export scripts (`binary_mnist_create.py`,
 
 ## Status
 
-This release is assembled from the local working tree. The Task 1 **Step-by-Step
-CUDA**, **Torch ANN**, and **SpikingJelly** baselines were authored on a rented
-V100 server that has since been decommissioned and are **not yet re-added here**;
-the Task 1 VD-TTFS method and its corrected event-driven CUDA baseline are
-included. Task 2 and Task 3 carry their full implementation set.
+All three tasks carry their full implementation set. The Task 1 **Step-by-Step
+CUDA**, **Torch ANN**, and **SpikingJelly** baselines were originally authored on
+a rented V100 server that has since been decommissioned; they were **reconstructed
+from the local network/dynamics specification** (the VD-TTFS source and the Task 2
+baselines) and validated to reproduce the paper's behaviour on the full 10,000-image
+MNIST test set: Step-by-Step CUDA **98.18%** (identical to VD-TTFS), Torch ANN
+**99.3%**, SpikingJelly **98.67%**.
 
 ## Citation
 
