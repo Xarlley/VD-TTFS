@@ -19,25 +19,38 @@ the integrator sweeps. It is a compile-time constant (`CHUNK` / `CHUNK_SIZE`):
 
 ### A.1 Method
 
-**The trade-off.** The integrator partitions the (truncated) window `[0, T'_ℓ)`
+**The trade-off.** The integrator partitions each layer's firing window (W timesteps wide, truncated to `[0, T'_ℓ)`)
 into chunks of Δ timesteps, accumulates the events arriving in each chunk into a
 per-neuron register array `delta[Δ]`, integrates chunk by chunk, and halts the
 instant a neuron crosses threshold (later chunks are never fetched). Two opposing
 effects result:
 
 - **Finer Δ** stops the neuron at finer granularity (fewer post-firing synapses
-  processed) but multiplies the fixed per-chunk bookkeeping over `⌈T/Δ⌉` chunks.
+  processed) but multiplies the fixed per-chunk bookkeeping over `⌈W/Δ⌉` chunks.
 - **Coarser Δ** issues fewer chunks but blunts the early exit and enlarges
   `delta[Δ]`, which eventually spills to (slow) local memory.
 
-The optimum tracks the early-exit factor γ and the window T: strong early exit
+The optimum tracks the early-exit factor γ and the per-layer window W: strong early exit
 (small γ) favours fine Δ; weak/absent early exit (γ→1) favours coarse Δ, up to the
 point where `delta[Δ]` local-memory pressure dominates.
 
 **Determination procedure.** For each task we sweep Δ over powers of two up to the
-window length, recompile, run the full evaluation set on the target GPU, and select
+per-layer window W, recompile, run the full evaluation set on the target GPU, and select
 the latency minimum (min of 3 runs). Accuracy is recorded at every Δ to confirm
 losslessness.
+
+**Per-layer window vs. total simulation length.** The window W chunked above is
+the window within which a *single layer's* neurons fire — distinct from the
+network's total simulation length T (the value in the table captions below). The
+T2FSNN-derived networks (Tasks 1–2) are depth-staggered: every layer fires within a
+local W=80-step window, and successive layers are offset by a fixed inter-layer
+delay of 40 (each layer's events are re-based to `[0,W)` before chunking). For the
+shallow, un-staggered LeNet (Task 1) the two coincide, T=80. For VGG-16 (Task 2) the
+offsets accumulate across its 16 weight layers — 15×40 + 80 = 680 — so T=680, yet
+each layer is still integrated within its own 80-step window. The DVSGesture network
+(Task 3) is not staggered, so W=T=160. Hence Δ partitions the per-layer window W,
+and the sweeps below range only up to W (≤80 for Tasks 1–2, ≤160 for Task 3) — never
+up to VGG-16's 680.
 
 ### A.2 Measured sweeps (RTX 5070 Ti, full eval set, min of 3 runs)
 
@@ -51,7 +64,7 @@ losslessness.
 | 32 | 98.18% | 0.0489 |
 | 64 | 98.18% | 0.0559 |
 
-**Task 2 — VGG-16/CIFAR-10 (T=80), 10,000 images**
+**Task 2 — VGG-16/CIFAR-10 (T=680), 10,000 images**
 
 | Δ | Accuracy | Inference time (s) |
 |---|---|---|

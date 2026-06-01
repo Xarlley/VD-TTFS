@@ -42,7 +42,8 @@ optima are hardware-specific, but the underlying relationship is not (Section~\r
 \subsection{Method}\label{app:chunk-method}
 
 \paragraph{The trade-off.}
-The integrator partitions the (truncated) window $[0,T'_\ell)$ into chunks of
+The integrator partitions each layer's firing window---$W$ timesteps wide,
+truncated to $[0,T'_\ell)$---into chunks of
 $\Delta$ timesteps, accumulates the synaptic events arriving within each chunk
 into a per-neuron register array \texttt{delta}$[\Delta]$, integrates chunk by
 chunk, and \emph{halts the instant a neuron crosses its threshold}, so the events
@@ -53,7 +54,7 @@ exit and induces two opposing effects:
     granularity, so fewer \emph{post-firing} synapses are processed---valuable
     when the arrival-ordered early exit is active. However, each chunk carries a
     fixed bookkeeping cost (clearing \texttt{delta}$[\Delta]$, a threshold scan,
-    loop overhead), repeated $\lceil T/\Delta\rceil$ times, so a very small
+    loop overhead), repeated $\lceil W/\Delta\rceil$ times, so a very small
     $\Delta$ multiplies that overhead.
   \item A \textbf{coarser} $\Delta$ issues fewer chunks and less bookkeeping, but
     blunts the early exit (a fired neuron still pays out its current chunk) and
@@ -61,14 +62,14 @@ exit and induces two opposing effects:
     spills into local memory, which is slow.
 \end{itemize}
 The optimum therefore depends on how much early exit there is to exploit---i.e.\
-the arrival-ordered early-exit factor $\gamma$---and on the window length $T$:
+the arrival-ordered early-exit factor $\gamma$---and on the per-layer window $W$:
 a strong early exit (small $\gamma$) rewards a fine $\Delta$, whereas a weak or
 absent early exit ($\gamma\!\to\!1$) turns fine chunking into pure overhead and
 favours a coarser $\Delta$, up to the point where \texttt{delta}$[\Delta]$
 local-memory pressure dominates.
 
 \paragraph{Determination procedure.}
-For each task we sweep $\Delta$ over powers of two up to the window length,
+For each task we sweep $\Delta$ over powers of two up to the per-layer window $W$,
 recompile, run the \emph{full} evaluation set on the target GPU, and select the
 latency minimum. Each configuration is executed three times and the minimum
 inference time is reported to suppress scheduling jitter. The task accuracy is
@@ -76,6 +77,21 @@ recorded at every $\Delta$: re-chunking is an exact re-ordering of the same
 synaptic events, so the prediction must be invariant, which we verify empirically
 (the lone exception, due to floating-point summation order, is discussed in
 Section~\ref{app:chunk-find}).
+
+\paragraph{Per-layer window versus total simulation length.}
+The window $W$ chunked above is the window within which a \emph{single layer's}
+neurons fire, which is distinct from a network's total simulation length $T$ (the
+value reported in the table captions below). The T2FSNN-derived networks
+(Tasks~1--2) are depth-staggered: every layer fires within a local window of $W=80$
+timesteps, and successive layers are offset by a fixed inter-layer delay of $40$,
+each layer's events being re-based to $[0,W)$ before chunking. For the shallow,
+effectively un-staggered LeNet (Task~1) the two coincide, $T=80$. For VGG-16
+(Task~2) the offsets accumulate across its sixteen weight layers---%
+$15\times 40 + 80 = 680$---so $T=680$, even though each layer is still integrated
+within its own $80$-step window. The DVSGesture network (Task~3) is not staggered,
+so $W=T=160$. Consequently $\Delta$ partitions the per-layer window $W$, and the
+sweeps below range only up to $W$ ($\le 80$ for Tasks~1--2, $\le 160$ for Task~3)---%
+never up to VGG-16's $680$.
 
 \subsection{Measured Sweeps}\label{app:chunk-data}
 
@@ -101,7 +117,7 @@ $\Delta$ & Accuracy & Inference time (s) & \\
 
 \begin{table}[t]
 \centering
-\caption{Task~2, VGG-16/CIFAR-10 ($T=80$), full 10{,}000-image test set.}
+\caption{Task~2, VGG-16/CIFAR-10 ($T=680$), full 10{,}000-image test set.}
 \label{tab:chunk-t2}
 \begin{tabular}{cccc}
 \toprule
